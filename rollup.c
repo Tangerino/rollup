@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -19,11 +18,13 @@ enum {
     ROLLUP_YEAR
 } enAggregationType;
 
+
 void lap (const char *message) {
     time_t t = time(NULL);
     printf ("%s. New lap %ld seconds\n", message, (long)(t - elapsedControl));
     elapsedControl = t;
 }
+
 int execSql(sqlite3 *db, const char *sql) {
     int rc = sqlite3_exec(db, sql, NULL, 0, NULL);
     if (rc && (rc != SQLITE_CONSTRAINT)) {
@@ -83,7 +84,6 @@ int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
             return SQLITE_OK;
             break;
     }
-    
     sprintf (query, insert, tagId, type, (int64_t)utc, (int64_t)utc);
     rc = execSql(db, query);
     if (rc == SQLITE_CONSTRAINT) {
@@ -101,6 +101,9 @@ static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, const char *dt, 
                         "type=%d and dt='%s' and ts=%" PRId64 ";";
     const char *insert = "insert into rollup (tagid, type, dt, vsum, vavg, vmax, vmin, vcount, ts) "
                          "values (%" PRId64 ", %d, '%s', %g, %g, %g, %g, %" PRId64 ", %" PRId64 ");";
+    if (vcount == 0 || dt == NULL) {
+        return SQLITE_OK;
+    }
     sprintf (query, insert, tagId, type, dt, vsum, vavg, vmax, vmin, vcount, (int64_t)ts);
     rc = execSql (db, query);
     if (rc != SQLITE_OK) {
@@ -119,20 +122,18 @@ static int rollupTagByYear (sqlite3 *db, int64_t id, int64_t tagId, const char *
     char query[2048];
     time_t ts = iso8602ts(dt);
     time_t ts2 = timeAddYear(ts);
+    time_t tdif = ts2 - ts;
     /* o ts - 1 abaixo eh para fazer com que os intervalos caiam no dia correto,
      do primeiro 00:15 ate o penultimo, nao vai fazer diferenca, mas para o ultimo
      que cai no outro dia, zero hora do dia seguinte,
      isto faz com que ele volte um segundo e ajuste o dia para tras*/
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*),"
-                        " strftime('%%Y-01-01T00:00:00', ts, 'unixepoch') as at "
+    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*)"
                         " from rollup "
                         " where "
                         " tagid =  %" PRId64 " and "
                         " type = %d and "
                         " ts >= %" PRId64 " and "
-                        " ts <  %" PRId64 " "
-                        " group by at"
-                        " order by ts;";
+                        " ts <  %" PRId64 " ";
     sprintf (query, select, tagId, (int)ROLLUP_MONTH, (int64_t)ts, (int64_t)ts2);
     sqlite3_stmt *st = NULL;
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
@@ -143,9 +144,7 @@ static int rollupTagByYear (sqlite3 *db, int64_t id, int64_t tagId, const char *
             double vmax =                  sqlite3_column_double (st, 2);
             double vmin =                  sqlite3_column_double (st, 3);
             int64_t vcount =               sqlite3_column_int64  (st, 4);
-            const char *at = (const char *)sqlite3_column_text   (st, 5);
-            ts = iso8602ts(at);
-            rc = upsertRollup(db, tagId, ROLLUP_YEAR, at, ts, vsum, vavg, vmax, vmin, vcount);
+            rc = upsertRollup(db, tagId, ROLLUP_YEAR, dt, ts, vsum, vavg, vmax, vmin, vcount);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -160,25 +159,24 @@ static int rollupTagByYear (sqlite3 *db, int64_t id, int64_t tagId, const char *
 static int rollupTagByMonth (sqlite3 *db, int64_t id, int64_t tagId, const char *dt) {
     int rc = SQLITE_OK;
     char query[2048];
-    time_t ts = iso8602ts(dt);
-    time_t ts2 = timeAddMonth(ts);
+    time_t ts   = iso8602ts(dt);
+    time_t ts2  = timeAddMonth(ts);
+    time_t tdif = ts2 - ts;
     /* o ts - 1 abaixo eh para fazer com que os intervalos caiam no dia correto,
      do primeiro 00:15 ate o penultimo, nao vai fazer diferenca, mas para o ultimo
      que cai no outro dia, zero hora do dia seguinte,
-     isto faz com que ele volte um segundo e ajuste o dia para tras*/
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*),"
-                        " strftime('%%Y-%%m-01T00:00:00', ts, 'unixepoch') as at "
+     isto faz com que ele volte um segundo e ajuste o dia para tras
+    */
+    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*)"
                         " from rollup "
                         " where "
                         " tagid =  %" PRId64 " and "
                         " type = %d and "
                         " ts >= %" PRId64 " and "
-                        " ts <  %" PRId64 " "
-                        " group by at"
-                        " order by ts;";
+                        " ts < %" PRId64 " ";
     sprintf (query, select, tagId, (int)ROLLUP_DAY, (int64_t)ts, (int64_t)ts2);
     sqlite3_stmt *st = NULL;
-    rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
+    rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);//1356912000
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
             double vsum =                  sqlite3_column_double (st, 0);
@@ -186,9 +184,7 @@ static int rollupTagByMonth (sqlite3 *db, int64_t id, int64_t tagId, const char 
             double vmax =                  sqlite3_column_double (st, 2);
             double vmin =                  sqlite3_column_double (st, 3);
             int64_t vcount =               sqlite3_column_int64  (st, 4);
-            const char *at = (const char *)sqlite3_column_text   (st, 5);
-            ts = iso8602ts(at);
-            rc = upsertRollup(db, tagId, ROLLUP_MONTH, at, ts, vsum, vavg, vmax, vmin, vcount);
+            rc = upsertRollup(db, tagId, ROLLUP_MONTH, dt, ts, vsum, vavg, vmax, vmin, vcount);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -208,16 +204,13 @@ static int rollupTagByDay (sqlite3 *db, int64_t id, int64_t tagId, const char *d
      do primeiro 00:15 ate o penultimo, nao vai fazer diferenca, mas para o ultimo
      que cai no outro dia, zero hora do dia seguinte,
      isto faz com que ele volte um segundo e ajuste o dia para tras*/
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*),"
-                        " strftime('%%Y-%%m-%%dT00:00:00', ts, 'unixepoch') as at "
+    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), count(*)"
                         " from rollup "
                         " where "
                         " tagid =  %" PRId64 " and "
                         " type = %d and "
                         " ts >= %" PRId64 " and "
-                        " ts <  %" PRId64 " "
-                        " group by at"
-                        " order by ts;";
+                        " ts < %" PRId64 " ";
     sprintf (query, select, tagId, (int)ROLLUP_HOUR, (int64_t)ts, (int64_t)ts + (3600 * 24));
     sqlite3_stmt *st = NULL;
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
@@ -228,9 +221,9 @@ static int rollupTagByDay (sqlite3 *db, int64_t id, int64_t tagId, const char *d
             double vmax =                  sqlite3_column_double (st, 2);
             double vmin =                  sqlite3_column_double (st, 3);
             int64_t vcount =               sqlite3_column_int64  (st, 4);
-            const char *at = (const char *)sqlite3_column_text   (st, 5);
-            ts = iso8602ts(at);
-            rc = upsertRollup(db, tagId, ROLLUP_DAY, at, ts, vsum, vavg, vmax, vmin, vcount);
+            //const char *at = (const char *)sqlite3_column_text   (st, 5);
+            //ts = iso8602ts(at);
+            rc = upsertRollup(db, tagId, ROLLUP_DAY, dt, ts, vsum, vavg, vmax, vmin, vcount);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -246,15 +239,15 @@ static int rollupTagByHour (sqlite3 *db, int64_t id, int64_t tagId, const char *
     int rc = SQLITE_OK;
     char query[2048];
     time_t ts = iso8602ts(dt);
-    const char *select = "select sum(value), avg(value), max(value), min(value), count(value),"
-                        " strftime('%%Y-%%m-%%dT%%H:00:00', ts - 1, 'unixepoch') as at "
+    
+    const char *select = "select sum(value), avg(value), max(value), min(value), count(value)"
                         " from history "
                         " where "
-                        " tagid = %" PRId64 " and "
+                        " tagid = %" PRId64 " AND "
                         " ts > %" PRId64 " and "
                         " ts <= %" PRId64 " ";
 
-    sprintf (query, select, tagId, (int64_t)ts+1, (int64_t)ts + 3600+1);
+    sprintf (query, select, tagId, (int64_t)ts, (int64_t)ts + 3600);
     sqlite3_stmt *st = NULL;
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
@@ -264,9 +257,11 @@ static int rollupTagByHour (sqlite3 *db, int64_t id, int64_t tagId, const char *
             double    vmax =               sqlite3_column_double (st, 2);
             double    vmin =               sqlite3_column_double (st, 3);
             int64_t vcount =               sqlite3_column_int64  (st, 4);
-            const char *at = (const char *)sqlite3_column_text   (st, 5);
-            ts = iso8602ts(at);
-            rc = upsertRollup(db, tagId, ROLLUP_HOUR, at, ts, vsum, vavg, vmax, vmin, vcount);
+            //const char *at = (const char *)sqlite3_column_text   (st, 5);
+            if (vcount > 0) { // not null
+                //ts = iso8602ts(at);
+                rc = upsertRollup(db, tagId, ROLLUP_HOUR, dt, ts, vsum, vavg, vmax, vmin, vcount);
+            }
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -397,11 +392,11 @@ void main (int argc, char *argv[]) {
     if (rc == SQLITE_OK) {
         execSql (db, "PRAGMA journal_mode=WAL;");
         lap ("Start process");
-        generateSampleData(db,"2000-01-01T00:00:00", "2001-01-01T00:15:00", 900);
+        generateSampleData(db,"2013-01-01T00:00:00", "2013-01-02T02:30:00", 900);
         lap ("Simulated data done");
         doRollup(db);
         lap ("Rollup done");
         sqlite3_close(db);
     }
-}
+}   
 
