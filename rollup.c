@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "sqlite3.h"
+
 time_t elapsedControl;
 
 enum {
@@ -17,7 +18,6 @@ enum {
     ROLLUP_MONTH,
     ROLLUP_YEAR
 } enAggregationType;
-
 
 void lap (const char *message) {
     time_t t = time(NULL);
@@ -31,6 +31,14 @@ int execSql(sqlite3 *db, const char *sql) {
         printf ("Error %d (%s) Query:%s\n", rc, sqlite3_errmsg(db), sql);
     }
     return rc;
+}
+
+char *tt2iso8602 (time_t tt, char *dt) {
+    struct tm *loctime;
+    char *localdt[256];
+    loctime = localtime(&tt);
+    strftime(dt, sizeof (localdt), "%Y-%m-%dT%H:%M:%S", loctime);
+    return dt;    
 }
 
 time_t iso8602ts (const char *isoDate) {
@@ -92,8 +100,7 @@ int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
     return rc;
 }
 
-static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, const char *dt, time_t ts, 
-        double vsum, double vavg, double vmax, double vmin, int64_t vcount) {
+static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, const char *dt, time_t ts, sqlite3_stmt *st) {
     int rc;
     char query[1024];
     const char *update = "update rollup set vsum=%g, vavg=%g, vmax=%g, vmin=%g, vcount=%" PRId64 " where "
@@ -101,7 +108,12 @@ static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, const char *dt, 
                         "type=%d and dt='%s' and ts=%" PRId64 ";";
     const char *insert = "insert into rollup (tagid, type, dt, vsum, vavg, vmax, vmin, vcount, ts) "
                          "values (%" PRId64 ", %d, '%s', %g, %g, %g, %g, %" PRId64 ", %" PRId64 ");";
-    if (vcount == 0 || dt == NULL) {
+    double vsum =    sqlite3_column_double (st, 0);
+    double vavg =    sqlite3_column_double (st, 1);
+    double vmax =    sqlite3_column_double (st, 2);
+    double vmin =    sqlite3_column_double (st, 3);
+    int64_t vcount = sqlite3_column_int64  (st, 4);
+    if (vcount == 0) {
         return SQLITE_OK;
     }
     sprintf (query, insert, tagId, type, dt, vsum, vavg, vmax, vmin, vcount, (int64_t)ts);
@@ -139,12 +151,7 @@ static int rollupTagByYear (sqlite3 *db, int64_t id, int64_t tagId, const char *
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            double vsum =                  sqlite3_column_double (st, 0);
-            double vavg =                  sqlite3_column_double (st, 1);
-            double vmax =                  sqlite3_column_double (st, 2);
-            double vmin =                  sqlite3_column_double (st, 3);
-            int64_t vcount =               sqlite3_column_int64  (st, 4);
-            rc = upsertRollup(db, tagId, ROLLUP_YEAR, dt, ts, vsum, vavg, vmax, vmin, vcount);
+            upsertRollup(db, tagId, ROLLUP_YEAR, dt, ts, st);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -179,12 +186,7 @@ static int rollupTagByMonth (sqlite3 *db, int64_t id, int64_t tagId, const char 
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);//1356912000
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            double vsum =                  sqlite3_column_double (st, 0);
-            double vavg =                  sqlite3_column_double (st, 1);
-            double vmax =                  sqlite3_column_double (st, 2);
-            double vmin =                  sqlite3_column_double (st, 3);
-            int64_t vcount =               sqlite3_column_int64  (st, 4);
-            rc = upsertRollup(db, tagId, ROLLUP_MONTH, dt, ts, vsum, vavg, vmax, vmin, vcount);
+            upsertRollup(db, tagId, ROLLUP_MONTH, dt, ts, st);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -216,14 +218,7 @@ static int rollupTagByDay (sqlite3 *db, int64_t id, int64_t tagId, const char *d
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            double vsum =                  sqlite3_column_double (st, 0);
-            double vavg =                  sqlite3_column_double (st, 1);
-            double vmax =                  sqlite3_column_double (st, 2);
-            double vmin =                  sqlite3_column_double (st, 3);
-            int64_t vcount =               sqlite3_column_int64  (st, 4);
-            //const char *at = (const char *)sqlite3_column_text   (st, 5);
-            //ts = iso8602ts(at);
-            rc = upsertRollup(db, tagId, ROLLUP_DAY, dt, ts, vsum, vavg, vmax, vmin, vcount);
+            upsertRollup(db, tagId, ROLLUP_DAY, dt, ts, st);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -239,7 +234,11 @@ static int rollupTagByHour (sqlite3 *db, int64_t id, int64_t tagId, const char *
     int rc = SQLITE_OK;
     char query[2048];
     time_t ts = iso8602ts(dt);
-    
+    struct tm timeinfo;
+    localtime_r (&ts, &timeinfo);
+    time_t localts = ts + timeinfo.tm_gmtoff;
+    char localdt[64];
+    tt2iso8602(localts, localdt);
     const char *select = "select sum(value), avg(value), max(value), min(value), count(value)"
                         " from history "
                         " where "
@@ -252,16 +251,7 @@ static int rollupTagByHour (sqlite3 *db, int64_t id, int64_t tagId, const char *
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            double    vsum =               sqlite3_column_double (st, 0);
-            double    vavg =               sqlite3_column_double (st, 1);
-            double    vmax =               sqlite3_column_double (st, 2);
-            double    vmin =               sqlite3_column_double (st, 3);
-            int64_t vcount =               sqlite3_column_int64  (st, 4);
-            //const char *at = (const char *)sqlite3_column_text   (st, 5);
-            if (vcount > 0) { // not null
-                //ts = iso8602ts(at);
-                rc = upsertRollup(db, tagId, ROLLUP_HOUR, dt, ts, vsum, vavg, vmax, vmin, vcount);
-            }
+            upsertRollup(db, tagId, ROLLUP_HOUR, localdt, localts, st);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -392,7 +382,7 @@ void main (int argc, char *argv[]) {
     if (rc == SQLITE_OK) {
         execSql (db, "PRAGMA journal_mode=WAL;");
         lap ("Start process");
-        generateSampleData(db,"2013-01-01T00:00:00", "2013-01-02T02:30:00", 900);
+        generateSampleData(db,"2000-01-01T00:00:00", "2014-01-02T02:30:00", 900);
         lap ("Simulated data done");
         doRollup(db);
         lap ("Rollup done");
