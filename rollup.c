@@ -360,8 +360,8 @@ static int doRollup (sqlite3 *db) {
 }
 
 static void generateSampleData (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int tagId, double value) {
-    const char *insert = "insert into history (tagid, value, ts, dt) "
-        "values (%d, %g, %" PRId64 ", strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch'));";
+    const char *insert = "insert into history (tagid, value, ts, dt, lt) "
+        "values (%d, %g, %" PRId64 ", strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch'), strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch','localtime'));";
     char query[1024];
     time_t sd = iso8602ts (startDate);
     time_t ed = iso8602ts (  endDate);
@@ -370,7 +370,7 @@ static void generateSampleData (sqlite3 *db, const char *startDate, const char *
     execSql (db, query);
     execSql (db, "begin;");
     for (;sd <= ed; sd += timeInterval) {
-        sprintf (query, insert, tagId, value, (int64_t)sd, (int64_t)sd);
+        sprintf (query, insert, tagId, value, (int64_t)sd, (int64_t)sd, (int64_t)sd);
         execSql (db, query);
         updateRollupControl (db, 1, ROLLUP_HOUR, sd);
     }
@@ -388,7 +388,7 @@ void main (int argc, char *argv[]) {
         execSql (db, "delete from rollup;");
         execSql (db, "delete from tag;");
         execSql (db, "delete from job;");        
-        generateSampleData(db,"2010-01-01T00:00:00", "2014-01-01T02:00:00", 900, 1,  1);
+        generateSampleData(db,"2010-01-01T00:00:00", "2015-01-01T00:00:00", 900, 1, 1);
         //generateSampleData(db,"2010-01-01T00:00:00", "2014-01-01T02:00:00", 900, 2, -1);
         lap ("Simulated data done");
         doRollup(db);
