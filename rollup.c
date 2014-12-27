@@ -13,7 +13,7 @@
 time_t elapsedControl;
 
 enum {
-    ROLLUP_HOUR,
+    ROLLUP_HOUR = 0,
     ROLLUP_DAY,
     ROLLUP_MONTH,
     ROLLUP_YEAR
