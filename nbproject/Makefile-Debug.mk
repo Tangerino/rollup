@@ -66,12 +66,12 @@ ${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/rollup: ${OBJECTFILES}
 ${OBJECTDIR}/sqlite3.o: sqlite3.c 
 	${MKDIR} -p ${OBJECTDIR}
 	${RM} "$@.d"
-	$(COMPILE.c) -g -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/sqlite3.o sqlite3.c
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/sqlite3.o sqlite3.c
 
 ${OBJECTDIR}/rollup.o: rollup.c 
 	${MKDIR} -p ${OBJECTDIR}
 	${RM} "$@.d"
-	$(COMPILE.c) -g -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/rollup.o rollup.c
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/rollup.o rollup.c
 
 # Subprojects
 .build-subprojects:
