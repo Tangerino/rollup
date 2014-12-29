@@ -1,3 +1,20 @@
+/*
+ * 
+ * 2014 July 8
+ * 
+ * The author disclaims copyright to this source code.  In place of
+ * a legal notice, here is a blessing:
+ *
+ *    May you do good and not evil.
+ *    May you find forgiveness for yourself and forgive others.
+ *    May you share freely, never taking more than you give.
+ *
+ *      Carlos Tangerino
+ *      carlos.tangerino@gmail.com
+ *      http://tangerino.me
+ * 
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -111,24 +128,20 @@ time_t getStartOfHour (time_t ts) {
 
 int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
     int rc;
-    const char *insert;
+    const char *insert  = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";;
     char query[512];
     
     switch (type) {
         case ROLLUP_HOUR:
-            insert = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";
             utc = getStartOfHour(utc - 1);
             break;
         case ROLLUP_DAY:
-            insert = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";
             utc = getStartOfDay(utc);
             break;
         case ROLLUP_MONTH:
-            insert = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";
             utc = getStartOfMonth(utc);
             break;
         case ROLLUP_YEAR:
-            insert = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";
             utc = getStartOfYear(utc);
             break;
         default:
@@ -197,63 +210,7 @@ static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, time_t ts, sqlit
     return rc;
 }
 
-static int rollupTagByYear (sqlite3 *db, int64_t tagId, int64_t ts) {
-    int rc = SQLITE_OK;
-    char query[2048];
-    time_t ts2 = timeAddYear(ts);
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), sum(vcount)"
-                        " from rollup "
-                        " where "
-                        " tagid =  %" PRId64 " and "
-                        " type = %d and "
-                        " ts >= %" PRId64 " and "
-                        " ts <  %" PRId64 " ";
-    sprintf (query, select, tagId, (int)ROLLUP_MONTH, (int64_t)ts, (int64_t)ts2);
-    sqlite3_stmt *st = NULL;
-    rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
-    if (rc == SQLITE_OK) {
-        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            upsertRollup(db, tagId, ROLLUP_YEAR, ts, st);
-        }
-        sqlite3_finalize(st);
-        if (rc == SQLITE_DONE) {
-            rc = SQLITE_OK;
-        }
-    } else {
-        printf ("%s - %s\n", sqlite3_errmsg(db), query);
-    }
-    return rc;
-}
-
-static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
-    int rc = SQLITE_OK;
-    char query[2048];
-    time_t ts2  = timeAddMonth(ts);
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), sum(vcount)"
-                        " from rollup "
-                        " where "
-                        " tagid =  %" PRId64 " and "
-                        " type = %d and "
-                        " ts >= %" PRId64 " and "
-                        " ts < %" PRId64 " ";
-    sprintf (query, select, tagId, (int)ROLLUP_DAY, (int64_t)ts, (int64_t)ts2);
-    sqlite3_stmt *st = NULL;
-    rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);//1356912000
-    if (rc == SQLITE_OK) {
-        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            upsertRollup(db, tagId, ROLLUP_MONTH, ts, st);
-        }
-        sqlite3_finalize(st);
-        if (rc == SQLITE_DONE) {
-            rc = SQLITE_OK;
-        }
-    } else {
-        printf ("%s - %s\n", sqlite3_errmsg(db), query);
-    }
-    return rc;
-}
-
-static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
+static int rollupTag (sqlite3 *db, int64_t tagId, int64_t startTs, int64_t endTs, int type) {
     int rc = SQLITE_OK;
     char query[2048];
     const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), sum(vcount)"
@@ -263,12 +220,12 @@ static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
                         " type = %d and "
                         " ts >= %" PRId64 " and "
                         " ts < %" PRId64 " ";
-    sprintf (query, select, tagId, (int)ROLLUP_HOUR, (int64_t)ts, (int64_t)ts + (3600 * 24));
+    sprintf (query, select, tagId, type, startTs, endTs);
     sqlite3_stmt *st = NULL;
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
         while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            upsertRollup(db, tagId, ROLLUP_DAY, ts, st);
+            upsertRollup(db, tagId, type + 1, startTs, st);
         }
         sqlite3_finalize(st);
         if (rc == SQLITE_DONE) {
@@ -277,6 +234,26 @@ static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
     } else {
         printf("%s - %s\n", sqlite3_errmsg(db), query);
     }
+    return rc;    
+}
+
+static int rollupTagByYear (sqlite3 *db, int64_t tagId, int64_t ts) {
+    int rc = SQLITE_OK;
+    time_t ts2 = timeAddYear(ts);
+    rc = rollupTag(db, tagId, ts, ts2, ROLLUP_MONTH);
+    return rc;
+}
+
+static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
+    int rc = SQLITE_OK;
+    time_t ts2  = timeAddMonth(ts);
+    rc = rollupTag(db, tagId, ts, ts2, ROLLUP_DAY);
+    return rc;
+}
+
+static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
+    int rc = SQLITE_OK;
+    rc = rollupTag(db, tagId, ts, ts + (3600 * 24),ROLLUP_HOUR);
     return rc;
 }
 
@@ -399,8 +376,8 @@ static int doRollup (sqlite3 *db) {
 }
 
 static void generateSampleData (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int tagId, double value) {
-    const char *insert = "insert into history (tagid, value, ts, dt, lt) "
-        "values (%d, %g, %" PRId64 ", strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch'), strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch','localtime'));";
+    const char *insert = "insert into history (tagid, value, ts) "
+        "values (%d, %g, %" PRId64 ");";
     char query[1024];
     time_t sd = iso8602ts (startDate);
     time_t ed = iso8602ts (  endDate);
@@ -436,4 +413,3 @@ int main (int argc, char *argv[]) {
     }
     return rc;
 }   
-
