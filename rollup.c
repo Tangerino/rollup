@@ -1,4 +1,4 @@
-/*
+/**
  * 
  * 2014 July 8
  * 
@@ -35,12 +35,22 @@ enum {
     ROLLUP_YEAR
 } enAggregationType;
 
+/**
+ * \brief Lap count
+ * @param message
+ */
 void lap (const char *message) {
     time_t t = time(NULL);
     printf ("%s. New lap %ld seconds\n", message, (long)(t - elapsedControl));
     elapsedControl = t;
 }
 
+/**
+ * \brief Execute a SQL command and handle error
+ * @param db The database connection
+ * @param sql The query to be executed
+ * @return 0 if all good
+ */
 int execSql(sqlite3 *db, const char *sql) {
     int rc = sqlite3_exec(db, sql, NULL, 0, NULL);
     if (rc && (rc != SQLITE_CONSTRAINT)) {
@@ -49,6 +59,12 @@ int execSql(sqlite3 *db, const char *sql) {
     return rc;
 }
 
+/**
+ * \brief Format a time stamp in ISOData format
+ * @param tt The time stamp
+ * @param dt The output buffer
+ * @return The pointer to the output buffer
+ */
 char *tt2iso8602 (time_t tt, char *dt) {
     struct tm *loctime;
     char *localdt[256];
@@ -57,6 +73,11 @@ char *tt2iso8602 (time_t tt, char *dt) {
     return dt;    
 }
 
+/**
+ * \brief Format the current time
+ * @param isoDate
+ * @return 
+ */
 time_t iso8602ts (const char *isoDate) {
     struct tm t;
     strptime(isoDate, "%Y-%m-%dT%H:%M:%S", &t);
@@ -64,6 +85,24 @@ time_t iso8602ts (const char *isoDate) {
     return tt;
 }
 
+/**
+ * \brief Add one year to the time stamp
+ * @param ts The time stamp
+ * @return The adjusted time stamp
+ */
+static time_t timeAddYear (time_t ts) {
+    struct tm tm;
+    localtime_r(&ts, &tm);
+    tm.tm_year++;
+    time_t tt = mktime(&tm);
+    return tt;
+}
+
+/**
+ * \brief Add one month to the time stamp
+ * @param ts The time stamp
+ * @return The adjusted time stamp
+ */
 static time_t timeAddMonth (time_t ts) {
     struct tm tm;
     localtime_r(&ts, &tm);
@@ -76,13 +115,11 @@ static time_t timeAddMonth (time_t ts) {
     return tt;
 }
 
-static time_t timeAddYear (time_t ts) {
-    struct tm tm;
-    localtime_r(&ts, &tm);
-    tm.tm_year++;
-    time_t tt = mktime(&tm);
-    return tt;
-}
+/**
+ * \brief Adjust the time stamp for the beginning of the year
+ * @param ts The time stamp
+ * @return Adjusted time stamp
+ */
 
 time_t getStartOfYear (time_t ts) {
     struct tm tm;
@@ -96,6 +133,11 @@ time_t getStartOfYear (time_t ts) {
     return t;
 }
 
+/**
+ * \brief Adjust the time stamp for the beginning of the month
+ * @param ts The time stamp
+ * @return Adjusted time stamp
+ */
 time_t getStartOfMonth (time_t ts) {
     struct tm tm;
     localtime_r (&ts, &tm);
@@ -107,6 +149,11 @@ time_t getStartOfMonth (time_t ts) {
     return t;
 }
 
+/**
+ * \brief Adjust the time stamp for the beginning of the day
+ * @param ts The time stamp
+ * @return Adjusted time stamp
+ */
 time_t getStartOfDay (time_t ts) {
     struct tm tm;
     localtime_r (&ts, &tm);
@@ -117,6 +164,11 @@ time_t getStartOfDay (time_t ts) {
     return t;
 }
 
+/**
+ * \brief Adjust the time stamp for the beginning of the hour
+ * @param ts The time stamp
+ * @return Adjusted time stamp
+ */
 time_t getStartOfHour (time_t ts) {
     struct tm tm;
     localtime_r (&ts, &tm);
@@ -126,6 +178,14 @@ time_t getStartOfHour (time_t ts) {
     return t;
 }
 
+/**
+ * \brief Update the JOB table
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param type The aggregation type
+ * @param utc The time stamp
+ * @return 
+ */
 int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
     int rc;
     const char *insert  = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";;
@@ -156,6 +216,15 @@ int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
     return rc;
 }
 
+/**
+ * \brief Update the roll up table
+ * @param db The data base connection
+ * @param tagId The tag ID
+ * @param type The aggregation type
+ * @param ts The time stamp
+ * @param st The sql statement to extract the data from
+ * @return 
+ */
 static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, time_t ts, sqlite3_stmt *st) {
     int rc;
     char query[1024];
@@ -210,6 +279,17 @@ static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, time_t ts, sqlit
     return rc;
 }
 
+/**
+ * \brief Perform the data aggregation
+ *        Aggregates the data in five different flavors as in:
+ *        MAX; MIN; AVERAGE; SUM and COUNT
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param startTs Start period
+ * @param endTs Final period
+ * @param type Aggregation type 
+ * @return 0 if all good
+ */
 static int rollupTag (sqlite3 *db, int64_t tagId, int64_t startTs, int64_t endTs, int type) {
     int rc = SQLITE_OK;
     char query[2048];
@@ -237,6 +317,13 @@ static int rollupTag (sqlite3 *db, int64_t tagId, int64_t startTs, int64_t endTs
     return rc;    
 }
 
+/**
+ * \brief Roll up data by year
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param ts The year to be rolled up
+ * @return 0 if all good
+ */
 static int rollupTagByYear (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
     time_t ts2 = timeAddYear(ts);
@@ -244,6 +331,13 @@ static int rollupTagByYear (sqlite3 *db, int64_t tagId, int64_t ts) {
     return rc;
 }
 
+/**
+ * \brief Roll up data by month
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param ts The month to be rolled up
+ * @return 0 if all good
+ */
 static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
     time_t ts2  = timeAddMonth(ts);
@@ -251,12 +345,26 @@ static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
     return rc;
 }
 
+/**
+ * \brief Roll up data by day
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param ts The day to be rolled up
+ * @return 0 if all good
+ */
 static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
     rc = rollupTag(db, tagId, ts, ts + (3600 * 24),ROLLUP_HOUR);
     return rc;
 }
 
+/**
+ * \brief Roll up data by hour
+ * @param db The database connection
+ * @param tagId The tag ID
+ * @param ts The hour to be rolled up
+ * @return 0 if all good
+ */
 static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
     char query[2048];
@@ -283,6 +391,12 @@ static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
     return rc;
 }
 
+/**
+ * \brief Do one type of data roll up for the entire data set
+ * @param db The database connection
+ * @param type The roll up type. See enAggregationType
+ * @return 0 if all good
+ */
 static int rollup (sqlite3 *db, int type) {
     int rc = SQLITE_OK;
     int nextRollup;
@@ -357,6 +471,11 @@ static int rollup (sqlite3 *db, int type) {
     return rc;
 }
 
+/**
+ * \brief Roll up up data by hour; day; month and year
+ * @param db The database connection
+ * @return 0 if all good
+ */
 static int doRollup (sqlite3 *db) {
     int rc = rollup(db, ROLLUP_HOUR);
     lap ("Hourly rollup done");
@@ -375,6 +494,17 @@ static int doRollup (sqlite3 *db) {
     return rc;
 }
 
+/**
+ * \Brief Populates the data base with initial data to be rolled
+ *        A good idea is to creates data interval with values 1 (one) so it is easy to
+ *        predict the results
+ * @param db Database connection
+ * @param startDate The start date in ISODate 8601
+ * @param endDate The final date in ISODate format
+ * @param timeInterval The data frequency in one hour, like 15 for one data every quarter hour
+ * @param tagId The Tag ID
+ * @param value The tag value
+ */
 static void generateSampleData (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int tagId, double value) {
     const char *insert = "insert into history (tagid, value, ts) "
         "values (%d, %g, %" PRId64 ");";
@@ -393,6 +523,13 @@ static void generateSampleData (sqlite3 *db, const char *startDate, const char *
     execSql (db, "commit;");
 }
 
+/**
+ * \brief Data rollup with domino effect
+ *        Details at http://tangerino.me/rollup.html
+ * @param argc
+ * @param argv
+ * @return 
+ */
 int main (int argc, char *argv[]) {
     sqlite3 *db;
     int rc = sqlite3_open("./testdb.db3", &db);
