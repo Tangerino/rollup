@@ -22,9 +22,15 @@
 #include <errno.h>
 #include <assert.h>
 #include <math.h>
+#include <pthread.h>
 #include <inttypes.h>
 #include <time.h>
 #include "sqlite3.h"
+#include <zmq.h>
+#include "rollup.h"
+#include "CJson.h"
+#include "worker.h"
+#include "sink.h"
 
 #define PI2 (M_PI * 2)
 #define ISGMT 1
@@ -35,13 +41,6 @@ long totalDataPoints = 0;
 long totalTime = 0;
 
 time_t elapsedControl;
-
-enum {
-    ROLLUP_HOUR = 0,
-    ROLLUP_DAY,
-    ROLLUP_MONTH,
-    ROLLUP_YEAR
-} enAggregationType;
 
 /**
  * \brief Lap count
@@ -378,6 +377,33 @@ static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
     return rc;
 }
 
+int buildAndSendMessage (void *sender, int64_t type, int64_t jobId, int64_t tagId, int64_t ts, sqlite3_stmt *st) {
+    int rc = 0;
+    cJSON *root = cJSON_CreateObject();
+    if (root) {
+        cJSON_AddNumberToObject (root, "jobid", jobId);
+        cJSON_AddNumberToObject (root, "tagid", tagId);
+        cJSON_AddNumberToObject (root, "ts",    ts);
+        cJSON_AddNumberToObject (root, "type",  type);    
+        cJSON *values = cJSON_CreateArray();
+        if (values) {
+            while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+                const unsigned char *strValue = sqlite3_column_text (st, 0);
+                cJSON *v = cJSON_CreateString(strValue);
+                cJSON_AddItemToArray (values, v);
+            }
+            sqlite3_finalize(st);
+            cJSON_AddItemToObject(root, "values", values);
+            char *msg = cJSON_Print(root);
+            //printf ("%s\r\n", msg);
+            rc = zmq_send(sender, msg, strlen(msg), 0);
+            free(msg);
+        }
+        cJSON_Delete(root);
+    }
+    return rc;
+}
+
 /**
  * \brief Roll up data by hour
  * @param db The database connection
@@ -385,11 +411,11 @@ static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
  * @param ts The hour to be rolled up
  * @return 0 if all good
  */
-static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
+static int rollupTagByHour (sqlite3 *db, int64_t jobId, int64_t tagId, int64_t ts, void *sender) {
     int rc = SQLITE_OK;
     char query[2048];
     hourlyInterval++;
-    const char *select = "select sum(value), avg(value), max(value), min(value), count(value)"
+    const char *select = "select value"
                         " from history "
                         " where "
                         " tagid = %" PRId64 " AND "
@@ -399,13 +425,7 @@ static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
     sqlite3_stmt *st = NULL;
     rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
     if (rc == SQLITE_OK) {
-        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-            upsertRollup(db, tagId, ROLLUP_HOUR, ts, st);
-        }
-        sqlite3_finalize(st);
-        if (rc == SQLITE_DONE) {
-            rc = SQLITE_OK;
-        }
+        rc = buildAndSendMessage(sender, ROLLUP_HOUR, jobId, tagId, ts, st);
     } else {
         printf ("%s - %s\n", sqlite3_errmsg(db), query);
     }
@@ -418,7 +438,7 @@ static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
  * @param type The roll up type. See enAggregationType
  * @return 0 if all good
  */
-static int rollup (sqlite3 *db, int type) {
+static int rollup (sqlite3 *db, int type, void *sender) {
     int rc = SQLITE_OK;
     int nextRollup;
     char query[1024];
@@ -431,7 +451,7 @@ static int rollup (sqlite3 *db, int type) {
                          "type = %d "
                          "order by tagid, ts";
     switch (type) {
-        case ROLLUP_HOUR:   // we move to local time when coming from history
+        case ROLLUP_HOUR:
             nextRollup = ROLLUP_DAY;
             break;
         case ROLLUP_DAY:
@@ -458,28 +478,20 @@ static int rollup (sqlite3 *db, int type) {
             switch (type) {
                 case ROLLUP_HOUR:
                     ts = getStartOfHour(ts);
-                    rc = rollupTagByHour  (db, tagId, ts);
+                    rc = rollupTagByHour  (db, id, tagId, ts, sender);
                     break;
                 case ROLLUP_DAY:
                     ts = getStartOfDay(ts);
-                    rc = rollupTagByDay   (db, tagId, ts);
+                    //rc = rollupTagByDay   (db, id, tagId, ts);
                     break;
                 case ROLLUP_MONTH:
                     ts = getStartOfMonth(ts);
-                    rc = rollupTagByMonth (db, tagId, ts);
+                    //rc = rollupTagByMonth (db, id, tagId, ts);
                     break;
                 case ROLLUP_YEAR:
                     ts = getStartOfYear(ts);
-                    rc = rollupTagByYear  (db, tagId, ts);
+                    //rc = rollupTagByYear  (db, id, tagId, ts);
                     break;            
-            }
-            if (rc == SQLITE_OK) {
-                const char *delete = "delete from job where id = %" PRId64 ";";
-                sprintf (query, delete, id);
-                execSql (db, query);
-                if (nextRollup != -1) {
-                    updateRollupControl (db, tagId, nextRollup, ts);
-                }
             }
         }
         sqlite3_finalize(st);
@@ -498,20 +510,28 @@ static int rollup (sqlite3 *db, int type) {
  * @return 0 if all good
  */
 static int doRollup (sqlite3 *db) {
-    int rc = rollup(db, ROLLUP_HOUR);
-    lap ("Hourly rollup done");
-    if (rc == SQLITE_OK) {
-        rc = rollup(db, ROLLUP_DAY);
-        lap ("Daily rollup done");
-        if (rc == SQLITE_OK) {
-            rc = rollup(db, ROLLUP_MONTH);
-            lap ("Monthly rollup done");
-            if (rc == SQLITE_OK) {
-                rc = rollup(db, ROLLUP_YEAR);
-                lap ("Yearly rollup done");
-            }
-        }
-    }
+    void *ctx = zmq_ctx_new();
+    assert (ctx);
+    void *sender = zmq_socket (ctx, ZMQ_PUSH); 
+    assert (sender);
+    zmq_bind (sender, "tcp://*:5557");   // PORT_A    
+    
+    int rc = rollup(db, ROLLUP_HOUR, sender);
+//    lap ("Hourly rollup done");
+//    if (rc == SQLITE_OK) {
+//        rc = rollup(db, ROLLUP_DAY);
+//        lap ("Daily rollup done");
+//        if (rc == SQLITE_OK) {
+//            rc = rollup(db, ROLLUP_MONTH);
+//            lap ("Monthly rollup done");
+//            if (rc == SQLITE_OK) {
+//                rc = rollup(db, ROLLUP_YEAR);
+//                lap ("Yearly rollup done");
+//            }
+//        }
+//    }
+    zmq_close(sender);
+    zmq_ctx_destroy(ctx);
     return rc;
 }
 
@@ -650,28 +670,34 @@ static void getDataFromTable (sqlite3 *db, int64_t tagId, int64_t measureId) {
  * @return 
  */
 int main (int argc, char *argv[]) {
+    
     sqlite3 *db;
-    int rc = sqlite3_open("/Volumes/ramdisk/testdb.db3", &db);
+    pthread_t sinkT;
+    pthread_t workerT;
+    int rc = sqlite3_open(DATABASE, &db);
     elapsedControl = time(NULL);
     if (rc == SQLITE_OK) {
+        pthread_create(&sinkT, NULL, (void *)sinkThread, NULL);
+        pthread_create(&workerT, NULL, (void *)workerThread, NULL);
         execSql (db, "PRAGMA journal_mode=WAL;");
         lap ("Start process");
         execSql (db, "delete from history;");
         execSql (db, "delete from rollup;");
         execSql (db, "delete from tag;");
         execSql (db, "delete from job;");   
-        const char *sd = "2013-01-01T00:00:00";
-        const char *ed = "2016-01-01T02:00:00";
+        const char *sd = "2015-01-01T00:00:00";
+        const char *ed = "2015-01-01T03:00:00";
         generateSampleData (db, sd, ed, 900, 1, 1, 1);
-        generateSampleData2(db, sd, ed, 900, 2, 32);
-        generateSampleData3(db, sd, ed, 900, 3, 96);
-        generateSampleData (db, sd, ed, 900, 130, 1, 1);
-        getDataFromTable(db,  8408, 30);
-        getDataFromTable(db, 38339, 30);
-        getDataFromTable(db, 196342, 31);
-        getDataFromTable(db, 196342, 30);
-        lap ("Simulated data done");
+//        generateSampleData2(db, sd, ed, 900, 2, 32);
+//        generateSampleData3(db, sd, ed, 900, 3, 96);
+//        generateSampleData (db, sd, ed, 900, 130, 1, 1);
+//        getDataFromTable(db,  8408, 30);
+//        getDataFromTable(db, 38339, 30);
+//        getDataFromTable(db, 196342, 31);
+//        getDataFromTable(db, 196342, 30);
+//        lap ("Simulated data done");
         doRollup(db);
+        sleep (5);
         lap ("Rollup done.");
         printf ("%ld data points, %ld hourly rollup, %ld daily rollup, %ld monthly rollup in %ld seconds", 
                 totalDataPoints,

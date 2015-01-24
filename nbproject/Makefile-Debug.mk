@@ -36,15 +36,20 @@ OBJECTDIR=${CND_BUILDDIR}/${CND_CONF}/${CND_PLATFORM}
 # Object Files
 OBJECTFILES= \
 	${OBJECTDIR}/sqlite3.o \
-	${OBJECTDIR}/rollup.o
+	${OBJECTDIR}/cJSON.o \
+	${OBJECTDIR}/jsonutil.o \
+	${OBJECTDIR}/rollup.o \
+	${OBJECTDIR}/sink.o \
+	${OBJECTDIR}/support.o \
+	${OBJECTDIR}/worker.o
 
 
 # C Compiler Flags
 CFLAGS=
 
 # CC Compiler Flags
-CCFLAGS=
-CXXFLAGS=
+CCFLAGS=-Wunused-function -Wunused-variable
+CXXFLAGS=-Wunused-function -Wunused-variable
 
 # Fortran Compiler Flags
 FFLAGS=
@@ -53,7 +58,7 @@ FFLAGS=
 ASFLAGS=
 
 # Link Libraries and Options
-LDLIBSOPTIONS=-lpthread -ldl
+LDLIBSOPTIONS=-lpthread -ldl -lzmq
 
 # Build Targets
 .build-conf: ${BUILD_SUBPROJECTS}
@@ -68,10 +73,35 @@ ${OBJECTDIR}/sqlite3.o: sqlite3.c
 	${RM} "$@.d"
 	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/sqlite3.o sqlite3.c
 
+${OBJECTDIR}/cJSON.o: cJSON.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/cJSON.o cJSON.c
+
+${OBJECTDIR}/jsonutil.o: jsonutil.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/jsonutil.o jsonutil.c
+
 ${OBJECTDIR}/rollup.o: rollup.c 
 	${MKDIR} -p ${OBJECTDIR}
 	${RM} "$@.d"
 	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/rollup.o rollup.c
+
+${OBJECTDIR}/sink.o: sink.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/sink.o sink.c
+
+${OBJECTDIR}/support.o: support.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/support.o support.c
+
+${OBJECTDIR}/worker.o: worker.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/worker.o worker.c
 
 # Subprojects
 .build-subprojects:
