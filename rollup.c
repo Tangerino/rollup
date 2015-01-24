@@ -26,6 +26,14 @@
 #include <time.h>
 #include "sqlite3.h"
 
+#define PI2 (M_PI * 2)
+#define ISGMT 1
+long hourlyInterval = 0;
+long dailyInterval = 0;
+long monthlyInterval = 0;
+long totalDataPoints = 0;
+long totalTime = 0;
+
 time_t elapsedControl;
 
 enum {
@@ -42,7 +50,16 @@ enum {
 void lap (const char *message) {
     time_t t = time(NULL);
     printf ("%s. New lap %ld seconds\n", message, (long)(t - elapsedControl));
+    totalTime += (long)(t - elapsedControl);
     elapsedControl = t;
+}
+
+struct tm * time_r (const time_t *time, struct tm *resultp, int isGmt) {
+    if (isGmt) {
+        return gmtime_r (time, resultp);
+    } else {
+        return localtime_r (time, resultp);        
+    }
 }
 
 /**
@@ -92,7 +109,7 @@ time_t iso8602ts (const char *isoDate) {
  */
 static time_t timeAddYear (time_t ts) {
     struct tm tm;
-    localtime_r(&ts, &tm);
+    time_r(&ts, &tm, ISGMT);
     tm.tm_year++;
     time_t tt = mktime(&tm);
     return tt;
@@ -105,7 +122,7 @@ static time_t timeAddYear (time_t ts) {
  */
 static time_t timeAddMonth (time_t ts) {
     struct tm tm;
-    localtime_r(&ts, &tm);
+    time_r(&ts, &tm, ISGMT);
     tm.tm_mon++;
     if (tm.tm_mon >= 12) {
         tm.tm_mon = 0;
@@ -123,7 +140,7 @@ static time_t timeAddMonth (time_t ts) {
 
 time_t getStartOfYear (time_t ts) {
     struct tm tm;
-    localtime_r (&ts, &tm);
+    time_r (&ts, &tm, ISGMT);
     tm.tm_sec = 0;
     tm.tm_min = 0;
     tm.tm_hour = 0;
@@ -140,7 +157,7 @@ time_t getStartOfYear (time_t ts) {
  */
 time_t getStartOfMonth (time_t ts) {
     struct tm tm;
-    localtime_r (&ts, &tm);
+    time_r (&ts, &tm, ISGMT);
     tm.tm_sec = 0;
     tm.tm_min = 0;
     tm.tm_hour = 0;
@@ -156,7 +173,7 @@ time_t getStartOfMonth (time_t ts) {
  */
 time_t getStartOfDay (time_t ts) {
     struct tm tm;
-    localtime_r (&ts, &tm);
+    time_r (&ts, &tm, ISGMT);
     tm.tm_sec = 0;
     tm.tm_min = 0;
     tm.tm_hour = 0;
@@ -171,7 +188,7 @@ time_t getStartOfDay (time_t ts) {
  */
 time_t getStartOfHour (time_t ts) {
     struct tm tm;
-    localtime_r (&ts, &tm);
+    time_r (&ts, &tm, ISGMT);
     tm.tm_min = 0;
     tm.tm_sec = 0;
     time_t t = mktime(&tm);
@@ -188,11 +205,12 @@ time_t getStartOfHour (time_t ts) {
  */
 int updateRollupControl (sqlite3 *db, int64_t tagId, int type, time_t utc) {
     int rc;
-    const char *insert  = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";;
+    const char *insert  = "insert into job (tagid, type, ts) values (%" PRId64 ",%d, %" PRId64 ");";
     char query[512];
     
     switch (type) {
         case ROLLUP_HOUR:
+            totalDataPoints++;
             utc = getStartOfHour(utc - 1);
             break;
         case ROLLUP_DAY:
@@ -293,7 +311,7 @@ static int upsertRollup (sqlite3 *db, uint64_t tagId, int type, time_t ts, sqlit
 static int rollupTag (sqlite3 *db, int64_t tagId, int64_t startTs, int64_t endTs, int type) {
     int rc = SQLITE_OK;
     char query[2048];
-    const char *select = "select sum(vsum), avg(vavg), max(vmax), min(vmin), sum(vcount)"
+    const char *select = "select total(vsum), avg(vavg), max(vmax), min(vmin), sum(vcount)"
                         " from rollup "
                         " where "
                         " tagid =  %" PRId64 " and "
@@ -340,6 +358,7 @@ static int rollupTagByYear (sqlite3 *db, int64_t tagId, int64_t ts) {
  */
 static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
+    monthlyInterval++;
     time_t ts2  = timeAddMonth(ts);
     rc = rollupTag(db, tagId, ts, ts2, ROLLUP_DAY);
     return rc;
@@ -354,6 +373,7 @@ static int rollupTagByMonth (sqlite3 *db, int64_t tagId, int64_t ts) {
  */
 static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
+    dailyInterval++;
     rc = rollupTag(db, tagId, ts, ts + (3600 * 24),ROLLUP_HOUR);
     return rc;
 }
@@ -368,6 +388,7 @@ static int rollupTagByDay (sqlite3 *db, int64_t tagId, int64_t ts) {
 static int rollupTagByHour (sqlite3 *db, int64_t tagId, int64_t ts) {
     int rc = SQLITE_OK;
     char query[2048];
+    hourlyInterval++;
     const char *select = "select sum(value), avg(value), max(value), min(value), count(value)"
                         " from history "
                         " where "
@@ -494,6 +515,13 @@ static int doRollup (sqlite3 *db) {
     return rc;
 }
 
+static void newTag (sqlite3 *db, int64_t tagId) {
+    char query[1024];
+    const char *newTag = "insert into tag (id, name) values (%" PRId64 ", 'TAG%" PRId64 "');";
+    sprintf (query, newTag, tagId, tagId);
+    execSql (db, query);    
+}
+
 /**
  * \Brief Populates the data base with initial data to be rolled
  *        A good idea is to creates data interval with values 1 (one) so it is easy to
@@ -505,22 +533,113 @@ static int doRollup (sqlite3 *db) {
  * @param tagId The Tag ID
  * @param value The tag value
  */
-static void generateSampleData (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int tagId, double value) {
+static void generateSampleData (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int64_t tagId, double seed, double increment) {
     const char *insert = "insert into history (tagid, value, ts) "
         "values (%d, %g, %" PRId64 ");";
     char query[1024];
     time_t sd = iso8602ts (startDate);
     time_t ed = iso8602ts (  endDate);
-    const char *newTag = "insert into tag (id, name) values (%d, 'TAG%d');";
-    sprintf (query, newTag, tagId, tagId);
-    execSql (db, query);
+    newTag (db, tagId);
     execSql (db, "begin;");
     for (;sd <= ed; sd += timeInterval) {
-        sprintf (query, insert, tagId, value, (int64_t)sd, (int64_t)sd, (int64_t)sd);
+        sprintf (query, insert, tagId, seed, (int64_t)sd, (int64_t)sd, (int64_t)sd);
+        seed += increment;
         execSql (db, query);
-        updateRollupControl (db, 1, ROLLUP_HOUR, sd);
+        updateRollupControl (db, tagId, ROLLUP_HOUR, sd);
     }
     execSql (db, "commit;");
+    /*
+     
+.mode list
+.separator ,
+select 
+"(" ||
+tagid, 
+cast(value as integer), 
+"'" || strftime('%Y-%m-%d %H:%M:%S.0000000 +00:00',ts,'unixepoch') || "'", 
+192 || "),"
+from history;
+          
+     */
+}
+
+static void generateSampleData2 (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int64_t tagId, double frequency) {
+    const char *insert = "insert into history (tagid, value, ts) "
+        "values (%d, %g, %" PRId64 ");";
+    char query[1024];
+    time_t sd = iso8602ts (startDate);
+    time_t ed = iso8602ts (  endDate);
+    newTag (db, tagId);
+    execSql (db, "begin;");
+    double seed = 0;
+    if (frequency == 0) frequency = 1;
+    for (;sd <= ed; sd += timeInterval) {
+        sprintf (query, insert, tagId, sin(seed), (int64_t)sd, (int64_t)sd, (int64_t)sd);
+        seed += (3.14 / frequency);
+        execSql (db, query);
+        updateRollupControl (db, tagId, ROLLUP_HOUR, sd);
+    }
+    execSql (db, "commit;");
+}
+
+static void generateSampleData3 (sqlite3 *db, const char *startDate, const char *endDate, int timeInterval, int64_t tagId, double frequency) {
+    const char *insert = "insert into history (tagid, value, ts) "
+        "values (%d, %g, %" PRId64 ");";
+
+    char query[1024];
+    time_t sd = iso8602ts (startDate);
+    time_t ed = iso8602ts (  endDate);
+    newTag (db, tagId);
+    execSql (db, "begin;");
+    double seed = 0;
+    if (frequency == 0) frequency = 1;
+    for (;sd <= ed; sd += timeInterval) {
+        double f = sin(seed * 0.5) * cos (seed * (1/0.5));
+        sprintf (query, insert, tagId, f, (int64_t)sd, (int64_t)sd, (int64_t)sd);
+        seed += (PI2 / frequency);
+        if (seed > PI2) seed = 0;
+        execSql (db, query);
+        updateRollupControl (db, tagId, ROLLUP_HOUR, sd);
+    }
+    execSql (db, "commit;");
+}
+
+static int fromWeToHis (sqlite3 *db, int64_t tagId, sqlite3_stmt *st) {
+    int64_t ts    = sqlite3_column_int64  (st, 0);
+    double  value = sqlite3_column_double (st, 1);
+    const char *insert = "insert into history (tagid, value, ts, dt) values "
+    "(%" PRId64 ", %g, %" PRId64 ",strftime('%%Y-%%m-%%dT%%H:%%M:%%S',%" PRId64 ",'unixepoch'));";
+    char query [2048];
+    sprintf (query, insert, tagId, value, ts, ts);
+    int rc = execSql (db, query);
+    if (rc == 0) {
+        rc = updateRollupControl (db, tagId, ROLLUP_HOUR, ts);
+    }
+    return rc;
+}
+
+static void getDataFromTable (sqlite3 *db, int64_t tagId, int64_t measureId) {
+    const char *select = "select ts, value from we where tagid=%" PRId64 " "
+    " and measureid = %" PRId64 ";";
+    char query[2048];
+    sqlite3_stmt *st;
+    int64_t finalTagId = tagId * 10000 + measureId;
+    newTag (db, finalTagId);
+    sprintf (query, select, tagId, measureId);
+    int rc = sqlite3_prepare_v2(db, query, (int)(strlen(query)), &st, NULL);
+    if (rc == SQLITE_OK) {
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            if (fromWeToHis (db, finalTagId, st)) {
+                break;
+            }
+        }
+        sqlite3_finalize(st);
+        if (rc == SQLITE_DONE) {
+            rc = SQLITE_OK;
+        }
+    } else {
+        printf("%s - %s\n", sqlite3_errmsg(db), query);
+    }
 }
 
 /**
@@ -532,7 +651,7 @@ static void generateSampleData (sqlite3 *db, const char *startDate, const char *
  */
 int main (int argc, char *argv[]) {
     sqlite3 *db;
-    int rc = sqlite3_open("./testdb.db3", &db);
+    int rc = sqlite3_open("/Volumes/ramdisk/testdb.db3", &db);
     elapsedControl = time(NULL);
     if (rc == SQLITE_OK) {
         execSql (db, "PRAGMA journal_mode=WAL;");
@@ -540,13 +659,27 @@ int main (int argc, char *argv[]) {
         execSql (db, "delete from history;");
         execSql (db, "delete from rollup;");
         execSql (db, "delete from tag;");
-        execSql (db, "delete from job;");        
-        generateSampleData(db,"2009-12-31T20:00:00", "2011-01-01T03:15:00", 900, 1, 1);
-        //generateSampleData(db,"2010-01-01T00:00:00", "2014-01-01T02:00:00", 900, 2, -1);
+        execSql (db, "delete from job;");   
+        const char *sd = "2013-01-01T00:00:00";
+        const char *ed = "2016-01-01T02:00:00";
+        generateSampleData (db, sd, ed, 900, 1, 1, 1);
+        generateSampleData2(db, sd, ed, 900, 2, 32);
+        generateSampleData3(db, sd, ed, 900, 3, 96);
+        generateSampleData (db, sd, ed, 900, 130, 1, 1);
+        getDataFromTable(db,  8408, 30);
+        getDataFromTable(db, 38339, 30);
+        getDataFromTable(db, 196342, 31);
+        getDataFromTable(db, 196342, 30);
         lap ("Simulated data done");
         doRollup(db);
-        lap ("Rollup done");
+        lap ("Rollup done.");
+        printf ("%ld data points, %ld hourly rollup, %ld daily rollup, %ld monthly rollup in %ld seconds", 
+                totalDataPoints,
+                hourlyInterval,
+                dailyInterval,
+                monthlyInterval,
+                totalTime);
         sqlite3_close(db);
     }
     return rc;
-}   
+}
