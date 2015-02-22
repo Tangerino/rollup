@@ -5,7 +5,7 @@
                    displayName="Header Files"
                    projectFiles="true">
       <itemPath>CJson.h</itemPath>
-      <itemPath>rollup.h</itemPath>
+      <itemPath>samples.h</itemPath>
       <itemPath>sink.h</itemPath>
       <itemPath>support.h</itemPath>
       <itemPath>worker.h</itemPath>
@@ -20,6 +20,7 @@
       <itemPath>cJSON.c</itemPath>
       <itemPath>jsonutil.c</itemPath>
       <itemPath>rollup.c</itemPath>
+      <itemPath>samples.c</itemPath>
       <itemPath>sink.c</itemPath>
       <itemPath>./sqlite3.c</itemPath>
       <itemPath>support.c</itemPath>
@@ -73,7 +74,9 @@
       </item>
       <item path="rollup.c" ex="false" tool="0" flavor2="0">
       </item>
-      <item path="rollup.h" ex="false" tool="3" flavor2="0">
+      <item path="samples.c" ex="false" tool="0" flavor2="0">
+      </item>
+      <item path="samples.h" ex="false" tool="3" flavor2="0">
       </item>
       <item path="sink.c" ex="false" tool="0" flavor2="0">
       </item>
@@ -124,7 +127,9 @@
       </item>
       <item path="rollup.c" ex="false" tool="0" flavor2="0">
       </item>
-      <item path="rollup.h" ex="false" tool="3" flavor2="0">
+      <item path="samples.c" ex="false" tool="0" flavor2="0">
+      </item>
+      <item path="samples.h" ex="false" tool="3" flavor2="0">
       </item>
       <item path="sink.c" ex="false" tool="0" flavor2="0">
       </item>

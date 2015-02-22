@@ -39,6 +39,7 @@ OBJECTFILES= \
 	${OBJECTDIR}/cJSON.o \
 	${OBJECTDIR}/jsonutil.o \
 	${OBJECTDIR}/rollup.o \
+	${OBJECTDIR}/samples.o \
 	${OBJECTDIR}/sink.o \
 	${OBJECTDIR}/support.o \
 	${OBJECTDIR}/worker.o
@@ -87,6 +88,11 @@ ${OBJECTDIR}/rollup.o: rollup.c
 	${MKDIR} -p ${OBJECTDIR}
 	${RM} "$@.d"
 	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/rollup.o rollup.c
+
+${OBJECTDIR}/samples.o: samples.c 
+	${MKDIR} -p ${OBJECTDIR}
+	${RM} "$@.d"
+	$(COMPILE.c) -g -Wall -I. -MMD -MP -MF "$@.d" -o ${OBJECTDIR}/samples.o samples.c
 
 ${OBJECTDIR}/sink.o: sink.c 
 	${MKDIR} -p ${OBJECTDIR}

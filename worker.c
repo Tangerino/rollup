@@ -29,10 +29,10 @@
 #include "sqlite3.h"
 #include "CJson.h"
 #include "jsonutil.h"
-#include "rollup.h"
 #include "support.h"
 
 #define DEFMSGSIZE 1024
+extern void *ctx;
 
 /**
  * \brief Roll up data by hour
@@ -42,7 +42,6 @@
  * @return 0 if all good
  */
 static cJSON *rollupTag (cJSON *values) {
-    cJSON *aggregatedValues = NULL;
     double vsum   = 0;
     double vmax   = 0;
     double vmin   = 0;
@@ -72,14 +71,14 @@ static cJSON *rollupTag (cJSON *values) {
         if (vcount > 0) {
             vavg = vsum / vcount;
         }
-        aggregatedValues = cJSON_CreateObject();
-        if (aggregatedValues) {
-            cJSON_AddNumberToObject (aggregatedValues, "sum",   vsum);
-            cJSON_AddNumberToObject (aggregatedValues, "max",   vmax);
-            cJSON_AddNumberToObject (aggregatedValues, "min",   vmin);
-            cJSON_AddNumberToObject (aggregatedValues, "count", vcount);
-            cJSON_AddNumberToObject (aggregatedValues, "avg",   vavg);
-        }
+    }
+    cJSON *aggregatedValues = cJSON_CreateObject();
+    if (aggregatedValues) {
+        cJSON_AddNumberToObject (aggregatedValues, "sum",   vsum);
+        cJSON_AddNumberToObject (aggregatedValues, "max",   vmax);
+        cJSON_AddNumberToObject (aggregatedValues, "min",   vmin);
+        cJSON_AddNumberToObject (aggregatedValues, "count", vcount);
+        cJSON_AddNumberToObject (aggregatedValues, "avg",   vavg);
     }
     return aggregatedValues;
 }
@@ -105,8 +104,10 @@ static int aggregate (int id, uint64_t jobid, uint64_t type, uint64_t tagId, uin
         printf ("[%d] Not good\r\n", id);
         return 1;
     }
+    cJSON_AddNumberToObject(reply, "workerid", id);
     cJSON_AddNumberToObject(reply, "jobid", jobid);
-    cJSON_AddNumberToObject(reply, "tagId", tagId);
+    cJSON_AddNumberToObject(reply, "tagid", tagId);    
+    cJSON_AddNumberToObject(reply, "type", type);
     cJSON_AddNumberToObject(reply, "ts", ts);
     cJSON_AddItemToObject(reply, "values", aggregatedValues);
     char *out = cJSON_Print(reply);
@@ -173,18 +174,17 @@ static void worker(int id, void *receiver, void *sender) {
  * @return
  */
 void workerThread(void *arg) {
-    void *ctx = zmq_ctx_new();
-    assert (ctx);
+    int workerId = *(int *) arg;
     void *receiver = zmq_socket (ctx, ZMQ_PULL); 
     assert (receiver);
     zmq_connect (receiver, "tcp://localhost:5557"); // PORT_A
     void *sender = zmq_socket (ctx, ZMQ_PUSH); 
     assert (sender);
     zmq_connect (sender, "tcp://localhost:5558");   // PORT_B
-    worker(1, receiver, sender);
+    worker(workerId, receiver, sender);
+    printf ("Worker thread [%d] ended\r\n", workerId);
     zmq_close(receiver);
     zmq_close(sender);
-    zmq_ctx_destroy(ctx);
     pthread_exit(NULL);
 }
 
