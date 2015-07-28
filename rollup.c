@@ -510,7 +510,7 @@ static int doRollup (sqlite3 *db) {
 
 /**
  * \Brief Populates the data base with initial data to be rolled
- *        A good idea is to creates data interval with values 1 (one) so it is easy to
+ *        A good idea is to create data interval with value 1 (one) so it's easy to
  *        predict the results
  * @param db Database connection
  * @param startDate The start date in ISODate 8601
